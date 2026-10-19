@@ -38,7 +38,7 @@ python .\seed_demo.py
 | Zookeeper | `demo.keeper@livinglens.local` | `LensKeeper-2026!` |
 | Citizen | `demo.citizen@livinglens.local` | `LensCitizen-2026!` |
 
-These credentials are for local evaluation only. Change or remove them before exposing the app to other users. The demo accounts have no sample observations or alerts. A zookeeper can submit an observation when the trained model is ready.
+These well-known credentials are for local evaluation only. The demo seeder and UI intentionally include them for local walkthroughs; never use the demo accounts or expose an instance seeded with them to the public internet. Create unique administrator and zookeeper credentials for any shared deployment.
 
 The administrator can create zookeeper accounts from the Accounts view. Citizens register from the sign-in link and can choose a zoo and optionally enter coordinates. Registration is public only for citizen accounts; admin and zookeeper roles are provisioned by the zoo administrator. Sessions use signed, HttpOnly, SameSite cookies and passwords are stored with scrypt hashes.
 
