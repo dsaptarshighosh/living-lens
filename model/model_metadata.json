@@ -1,0 +1,37 @@
+{
+  "model_version": "notebook-random-forest-200",
+  "feature_columns": [
+    "Intensity",
+    "Abnormality_Percentage",
+    "Duration_Minutes",
+    "Animal_Name_Crocodile",
+    "Animal_Name_Elephant",
+    "Animal_Name_Flamingo",
+    "Animal_Name_Giraffe",
+    "Behaviour_Abnormal grouping",
+    "Behaviour_Abnormal vocalization",
+    "Behaviour_Burrowing animals emerging",
+    "Behaviour_Repeated agitation",
+    "Behaviour_Sudden fleeing",
+    "Behaviour_Sudden movement",
+    "Behaviour_Unusual silence"
+  ],
+  "animal_names": [
+    "Crocodile",
+    "Elephant",
+    "Flamingo",
+    "Giraffe"
+  ],
+  "behaviours": [
+    "Abnormal grouping",
+    "Abnormal vocalization",
+    "Burrowing animals emerging",
+    "Repeated agitation",
+    "Sudden fleeing",
+    "Sudden movement",
+    "Unusual silence"
+  ],
+  "target": "Hazard_Probability",
+  "notebook_test_r2": 0.9394558106714824,
+  "notebook_test_mse": 21.57077026566328
+}

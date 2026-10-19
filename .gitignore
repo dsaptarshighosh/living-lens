@@ -2,9 +2,8 @@ living_lens.sqlite3
 *.sqlite
 *.sqlite3
 *.db
-model/model.joblib
-model/model_metadata.json
 *.joblib
+!model/model.joblib
 __pycache__/
 *.py[cod]
 .env
