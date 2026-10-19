@@ -69,10 +69,3 @@ python -m unittest discover -s .\tests -v
 
 The model-related tests need the local model files, so train the model first. The rest of the app uses Python’s standard library.
 
-## A few things to know
-
-- The design was recreated from exported reference screens; I didn't have the original Figma or source website.
-- The map is a simple view, not a live basemap or geocoding service.
-- There is no image/video analysis, weather integration, or independently validated hazard threshold.
-- Observation submission calls the model first. If the model is missing or rejects an input category, the observation is not saved.
-- The animal photos link to their original Wikimedia Commons pages and licenses.
