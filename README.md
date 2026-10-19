@@ -1,98 +1,72 @@
 # Living Lens
 
-Runnable local prototype built from the supplied Canva PDF interface frames and Colab notebook. The actual Figma file and source website project were not included, so this project does not claim an exact Figma match. The uploaded 2,800-row CSV has now been used to train the notebook's Random Forest model. The visual implementation follows the supplied 13-page Canva export: green gradient, deep teal panels, lime cards, and the visible landing, sign-in, registration, observation, history, map, account and guide views.
+I made Living Lens to explore whether changes in animal behaviour could help people notice possible environmental risks sooner. A zookeeper can record an observation and, once the model is set up, get an experimental hazard-probability estimate. Zookeepers can see their own observation history; zoo administrators manage keeper accounts.
 
-## Requirements
+This is a prototype, not an official warning system. The model's estimate is not a confirmed threat or a scientifically validated prediction.
 
-- Python 3.9 or newer.
-- No packages are needed to run the app or use SQLite, registration, sign-in, account provisioning, and API endpoints.
-- Model export needs `pandas`, `scikit-learn`, and `joblib` (see below).
+## Run it on your computer
 
-## Start
-
-In PowerShell, from this directory:
+You’ll need Python 3.9 or newer. In PowerShell, open this folder and run:
 
 ```powershell
-$env:LIVING_LENS_SECRET = 'replace-this-with-a-long-random-secret'
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+$env:LIVING_LENS_SECRET = (& python -c "import secrets; print(secrets.token_hex(32))")
 python .\server.py
 ```
 
-Open <http://127.0.0.1:8000>. The SQLite database is created at `living_lens.sqlite3` on first launch. Set `LIVING_LENS_DB` to choose another path. The API health route is `/api/health`.
+Then visit <http://127.0.0.1:8000>. The app creates a local SQLite database the first time it runs. Keep your secret private; don't reuse it for a public deployment.
 
-Provision a zoo administrator and their zoo using a strong password:
-
-```powershell
-$env:LIVING_LENS_SECRET = 'same-long-random-secret'
-python .\server.py --provision admin "Zoo Administrator" admin@example.test "replace-with-strong-password" "Example Zoo"
-```
-
-For a local demo only, seed these sample users after setting `LIVING_LENS_SECRET`:
+To try the demo accounts, stop the server, set the same secret again, and run:
 
 ```powershell
 python .\seed_demo.py
+python .\server.py
 ```
 
-| Role | Email | Password |
-| --- | --- | --- |
-| Zoo administrator | `demo.admin@livinglens.local` | `LensAdmin-2026!` |
-| Zookeeper | `demo.keeper@livinglens.local` | `LensKeeper-2026!` |
-| Citizen | `demo.citizen@livinglens.local` | `LensCitizen-2026!` |
+The demo sign-in page shows the local demo credentials. They are public and only for testing on your own computer. **Never expose a demo-seeded app to the internet.**
 
-These well-known credentials are for local evaluation only. The demo seeder and UI intentionally include them for local walkthroughs; never use the demo accounts or expose an instance seeded with them to the public internet. Create unique administrator and zookeeper credentials for any shared deployment.
+For a real zoo setup, create an administrator account instead:
 
-The administrator can create zookeeper accounts from the Accounts view. Citizens register from the sign-in link and can choose a zoo and optionally enter coordinates. Registration is public only for citizen accounts; admin and zookeeper roles are provisioned by the zoo administrator. Sessions use signed, HttpOnly, SameSite cookies and passwords are stored with scrypt hashes.
+```powershell
+python .\server.py --provision admin "Zoo Administrator" admin@example.test "use-a-unique-strong-password" "Example Zoo"
+```
 
-## Model availability and export
+The server needs `LIVING_LENS_SECRET` set for either startup method. You can copy `.env.example` as a reference for the available settings; the app does not load `.env` files automatically.
 
-The notebook trains a `RandomForestRegressor(n_estimators=200, random_state=100)` on an 80/20 split (`random_state=100`) and one-hot encodes `Animal_Name` and `Behaviour` with `pandas.get_dummies`. The private 2,800-row CSV and generated model artifacts are intentionally excluded from this public repository. The model must be trained locally from a compatible CSV before predictions are available. During local integration, the uploaded dataset's held-out test R² was 0.9395 and MSE was 21.5708; these differ from the notebook's saved result cells, so those cells correspond to a different dataset version.
+## Set up the model
 
-The zookeeper observation form follows the notebook inputs: animal name, behaviour, intensity, abnormality percentage (derived from affected and total animal counts), and duration. Animal and behaviour choices come from the trained artifact metadata. The API runs inference before saving each observation and rejects the submission if inference fails.
-
-To retrain with another compatible CSV, install the optional model dependencies and run:
+The model code follows the notebook: a 200-tree Random Forest using animal, behaviour, intensity, abnormality percentage, and observation duration. The dataset and trained model are deliberately not included here. If you have permission to use the dataset, install the model packages and train it locally:
 
 ```powershell
 python -m pip install pandas scikit-learn joblib
-python .\model\train_model.py "C:\path\to\zoo_sentinel_dataset_2800 (2) (1).csv"
+python .\model\train_model.py "C:\path\to\zoo_sentinel_dataset_2800.csv"
 ```
 
-This writes ignored local files `model/model.joblib` and `model/model_metadata.json`, using the notebook's model and train/test split. The backend loads the artifact once and only accepts animal and behaviour categories recorded in its metadata. Treat the model file as trusted code: joblib/pickle artifacts can execute code while loading. Review the dataset and artifact source before using them. Do not commit private datasets or model artifacts.
+The CSV needs these columns: `Animal_Name`, `Behaviour`, `Intensity`, `Abnormality_Percentage`, `Duration_Minutes`, and `Hazard_Probability`. Training creates `model/model.joblib` and `model/model_metadata.json` on your computer. Both files are ignored by Git. Without them, the upload form explains that predictions are unavailable.
 
-Set `LIVING_LENS_ALERT_THRESHOLD` only after confirming the target units and documenting an alert policy. No threshold is enabled by default. Alerts require both a genuine estimate above that configured threshold and actual coordinates. The estimate is not a calibrated probability for a named hazard. The current project does not analyze image/video uploads, weather, historical trends, or perform spatial-temporal clustering.
+The model is meant for experimentation with the supplied dataset, not operational hazard response. A high test score on one dataset does not establish real-world reliability. Joblib model files can execute code when loaded, so only train from data you trust.
 
-## Project files
+## What’s in the app
 
-- `server.py` - standard-library HTTP API, authentication, SQLite schema and role-scoped routes.
-- `static/` - responsive frontend reflecting the available Canva PDF screens.
-- `static/images/` - local animal photos for the homepage; each card links to the Commons source and its Creative Commons license.
-- `model/inference.py` - one-time model loader and notebook-compatible one-hot encoding adapter.
-- `model/train_model.py` - reproducible artifact export from the original dataset.
-- The fitted model, model metadata, dataset CSV, and local database are excluded from Git; supply a compatible CSV and retrain locally to enable predictions.
+- Zookeeper sign-in, observation entry, model estimate, and personal observation history.
+- Admin sign-in and zookeeper account management.
+- Citizen registration, zoo alerts, and a zoo map.
+- Six animal photos on the home page, with photographer and license credits.
+- A small Python standard-library server backed by SQLite.
 
-## API summary
-
-- `GET /api/health`, `GET /api/me`
-- `POST /api/register` (citizen), `POST /api/login`, `POST /api/logout`
-- `GET /api/observations`, `POST /api/observations` (zookeeper, own zoo)
-- `GET /api/zookeepers`, `POST /api/zookeepers` (admin, own zoo)
-- `GET /api/alerts`, `GET /api/map` (own zoo for zoo accounts and selected zoo for citizens)
-
-JSON errors include an `error` field and appropriate HTTP status. Observation writes call model inference first; if the artifact is missing, unavailable or rejects an unseen category, no observation/prediction is stored.
-
-## Checks
-
-Run the offline core checks with:
+## Run the checks
 
 ```powershell
 python -m unittest discover -s .\tests -v
 ```
 
-The checks cover password hashing, relational persistence, zoo filtering, count constraints, model inference, and saving an observation with its model prediction. Model-inference tests require locally generated artifacts, so train the model before running the complete suite. The local health endpoint and zookeeper upload form were also verified in the browser.
+The model-related tests need the local model files, so train the model first. The rest of the app uses Python’s standard library.
 
-## Current limitations
+## A few things to know
 
-- The PDF is a rasterized Canva project export rather than the referenced Figma design; visual fidelity to the Figma source cannot be verified.
-- There is no supplied source app, so the frontend is newly implemented to match the visible PDF frames and is not wired to an existing codebase.
-- The map plots actual coordinates proportionally on a simple panel, with no third-party basemap or geocoding service. Weather UI is omitted because no real weather provider/configuration was supplied.
-- Media attachment, alert acknowledgement, citizen distance-radius search, and an admin observation review screen were not implemented because the supplied frames do not give enough verified interaction/schema detail. These require the missing source design and product rules.
-
-The offline core test suite passes in this workspace, including a real prediction from the trained artifact. The app should be run locally after setting a secret.
+- The design was recreated from exported reference screens; I didn't have the original Figma or source website.
+- The map is a simple view, not a live basemap or geocoding service.
+- There is no image/video analysis, weather integration, or independently validated hazard threshold.
+- Observation submission calls the model first. If the model is missing or rejects an input category, the observation is not saved.
+- The animal photos link to their original Wikimedia Commons pages and licenses.
