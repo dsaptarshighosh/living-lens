@@ -6,7 +6,7 @@ This is a prototype, not an official warning system. The model's estimate is not
 
 ## Run it on your computer
 
-You’ll need Python 3.9 or newer. In PowerShell, open this folder and run:
+You'll need Python 3.9 or newer. In PowerShell, open this folder and run:
 
 ```powershell
 python -m venv .venv
@@ -17,7 +17,7 @@ python .\server.py
 
 Then visit <http://127.0.0.1:8000>. The app creates a local SQLite database the first time it runs. Keep your secret private; don't reuse it for a public deployment.
 
-To try the demo accounts, stop the server, set the same secret again, and run:
+To try the demo accounts, keep that terminal open, stop the server with Ctrl+C, then run:
 
 ```powershell
 python .\seed_demo.py
