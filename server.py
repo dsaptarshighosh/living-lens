@@ -59,14 +59,14 @@ def initialize():
     with db(): pass
 
 def send_notifications(zoo, animal, behaviour, score):
-    """Send opted-in alert updates through configured SMTP and Twilio providers."""
+    """Send opted-in report updates through configured SMTP and Twilio providers."""
     with db() as c:
         recipients=c.execute("SELECT u.email,p.phone,p.email_enabled,p.sms_enabled FROM users u JOIN notification_preferences p ON p.user_id=u.id WHERE u.role='citizen' AND u.zoo=? AND (p.email_enabled=1 OR p.sms_enabled=1)",(zoo,)).fetchall()
-    body=(f'A new experimental alert was recorded at {zoo}. Animal: {animal}. Observed behaviour: {behaviour}. Model estimate: {score:.1f}%. This is not an official warning. Check the Living Lens portal for details.')
+    body=(f'A new observation was submitted for {zoo}. Animal: {animal}. Observed behaviour: {behaviour}. Experimental model estimate: {score:.1f}%. This is not an official warning. Check the Living Lens portal for details.')
     sent=0
     for person in recipients:
         if person['email_enabled'] and all(os.environ.get(k) for k in ('LIVING_LENS_SMTP_HOST','LIVING_LENS_SMTP_FROM')):
-            msg=EmailMessage(); msg['Subject']=f'Living Lens update for {zoo}'; msg['From']=os.environ['LIVING_LENS_SMTP_FROM']; msg['To']=person['email']; msg.set_content(body)
+            msg=EmailMessage(); msg['Subject']=f'New Living Lens report for {zoo}'; msg['From']=os.environ['LIVING_LENS_SMTP_FROM']; msg['To']=person['email']; msg.set_content(body)
             with smtplib.SMTP(os.environ['LIVING_LENS_SMTP_HOST'],int(os.environ.get('LIVING_LENS_SMTP_PORT','587')),timeout=12) as smtp:
                 smtp.starttls(); user=os.environ.get('LIVING_LENS_SMTP_USERNAME'); password=os.environ.get('LIVING_LENS_SMTP_PASSWORD')
                 if user and password: smtp.login(user,password)
@@ -174,11 +174,9 @@ class Handler(BaseHTTPRequestHandler):
                     oid=cur.lastrowid; c.execute('INSERT INTO predictions(observation_id,estimate,model_version) VALUES(?,?,?)',(oid,estimate,version))
                     threshold=os.environ.get('LIVING_LENS_ALERT_THRESHOLD')
                     if not no_abnormal_behavior and threshold and estimate>=float(threshold): c.execute('INSERT OR IGNORE INTO alerts(observation_id,zoo,score,latitude,longitude) VALUES(?,?,?,?,?)',(oid,zoo,estimate,lat,lon))
-                    alert=c.execute('SELECT id FROM alerts WHERE observation_id=?',(oid,)).fetchone()
                 sent=0
-                if alert:
-                    try: sent=send_notifications(zoo,animal,behaviour,estimate)
-                    except Exception as notify_error: print(f'Notification delivery failed: {notify_error}')
+                try: sent=send_notifications(zoo,animal,behaviour,estimate)
+                except Exception as notify_error: print(f'Notification delivery failed ({type(notify_error).__name__})')
                 return self.send_json(201,{'id':oid,'estimate':estimate,'model_version':version,'abnormality_percentage':abnormal,'no_abnormal_behavior':no_abnormal_behavior,'notifications_sent':sent})
             except Exception as e: return self.send_json(500,{'error':f'Could not save observation: {e}'})
         if path=='/api/zookeepers':
