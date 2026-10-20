@@ -119,17 +119,23 @@ class Handler(BaseHTTPRequestHandler):
                 if total<1 or affected<0 or affected>total or not (0<=intensity<=10) or duration<=0 or not all((animal,behaviour,enclosure,desc)): raise ValueError('Check required fields, animal counts, intensity (0-10), and duration.')
                 abnormal=round(affected/total*100,2)
             except (KeyError,ValueError,TypeError) as e: return self.send_json(422,{'error':str(e) or 'Invalid observation'})
-            # Never persist an observation unless the genuine notebook model produced its estimate.
-            try: estimate,version=inference.predict(animal,behaviour,intensity,abnormal, duration)
-            except RuntimeError as e: return self.send_json(503,{'error':f'Observation was not saved: {e}','model_ready':False})
-            except ValueError as e: return self.send_json(422,{'error':str(e)})
+            # With no affected animals there is no observed behavioural signal to score.
+            # Store an explicit no-signal result instead of letting other features
+            # produce a misleading high estimate.
+            no_abnormal_behavior=affected==0
+            if no_abnormal_behavior:
+                estimate,version=0.0,'no-abnormal-behavior-observed'
+            else:
+                try: estimate,version=inference.predict(animal,behaviour,intensity,abnormal, duration)
+                except RuntimeError as e: return self.send_json(503,{'error':f'Observation was not saved: {e}','model_ready':False})
+                except ValueError as e: return self.send_json(422,{'error':str(e)})
             try:
                 with db() as c:
                     cur=c.execute('INSERT INTO observations(user_id,zoo,enclosure,animal,behaviour,total_animals,affected_animals,abnormality,intensity,duration,description,latitude,longitude) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(u['id'],u['zoo'],enclosure,animal,behaviour,total,affected,abnormal,intensity,duration,desc,lat,lon))
                     oid=cur.lastrowid; c.execute('INSERT INTO predictions(observation_id,estimate,model_version) VALUES(?,?,?)',(oid,estimate,version))
                     threshold=os.environ.get('LIVING_LENS_ALERT_THRESHOLD')
-                    if threshold and lat is not None and lon is not None and estimate>=float(threshold): c.execute('INSERT OR IGNORE INTO alerts(observation_id,zoo,score,latitude,longitude) VALUES(?,?,?,?,?)',(oid,u['zoo'],estimate,lat,lon))
-                return self.send_json(201,{'id':oid,'estimate':estimate,'model_version':version,'abnormality_percentage':abnormal})
+                    if not no_abnormal_behavior and threshold and lat is not None and lon is not None and estimate>=float(threshold): c.execute('INSERT OR IGNORE INTO alerts(observation_id,zoo,score,latitude,longitude) VALUES(?,?,?,?,?)',(oid,u['zoo'],estimate,lat,lon))
+                return self.send_json(201,{'id':oid,'estimate':estimate,'model_version':version,'abnormality_percentage':abnormal,'no_abnormal_behavior':no_abnormal_behavior})
             except Exception as e: return self.send_json(500,{'error':f'Could not save observation: {e}'})
         if path=='/api/zookeepers':
             if u['role']!='admin': return self.send_json(403,{'error':'Administrator access required'})
