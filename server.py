@@ -1,6 +1,7 @@
 """Living Lens API. Uses only Python's standard library so the starter runs offline."""
 from __future__ import annotations
-import hashlib, hmac, json, os, secrets, sqlite3, time
+import hashlib, hmac, json, os, secrets, sqlite3, time, smtplib, urllib.parse, urllib.request, base64
+from email.message import EmailMessage
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,6 +14,7 @@ SECRET = os.environ.get('LIVING_LENS_SECRET', '')
 COOKIE = 'living_lens_session'
 sys.path.insert(0,str(ROOT/'model'))
 import inference
+from zoos import ZOOS, ZOO_NAMES
 
 SCHEMA = '''
 PRAGMA foreign_keys=ON;
@@ -20,6 +22,7 @@ CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, ema
 CREATE TABLE IF NOT EXISTS observations(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), zoo TEXT NOT NULL, enclosure TEXT NOT NULL, animal TEXT NOT NULL, behaviour TEXT NOT NULL, total_animals INTEGER NOT NULL CHECK(total_animals>0), affected_animals INTEGER NOT NULL CHECK(affected_animals>=0 AND affected_animals<=total_animals), abnormality REAL NOT NULL, intensity REAL NOT NULL, duration REAL NOT NULL, description TEXT NOT NULL, latitude REAL, longitude REAL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS predictions(id INTEGER PRIMARY KEY, observation_id INTEGER NOT NULL UNIQUE REFERENCES observations(id), estimate REAL NOT NULL, model_version TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS alerts(id INTEGER PRIMARY KEY, observation_id INTEGER NOT NULL REFERENCES observations(id), zoo TEXT NOT NULL, score REAL NOT NULL, latitude REAL, longitude REAL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(observation_id));
+CREATE TABLE IF NOT EXISTS notification_preferences(user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, phone TEXT, email_enabled INTEGER NOT NULL DEFAULT 0, sms_enabled INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_obs_zoo_time ON observations(zoo,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alert_zoo_status ON alerts(zoo,status);
 '''
@@ -55,6 +58,28 @@ def initialize():
     if not SECRET: raise SystemExit('Set LIVING_LENS_SECRET to a long random value before starting.')
     with db(): pass
 
+def send_notifications(zoo, animal, behaviour, score):
+    """Send opted-in alert updates through configured SMTP and Twilio providers."""
+    with db() as c:
+        recipients=c.execute("SELECT u.email,p.phone,p.email_enabled,p.sms_enabled FROM users u JOIN notification_preferences p ON p.user_id=u.id WHERE u.role='citizen' AND u.zoo=? AND (p.email_enabled=1 OR p.sms_enabled=1)",(zoo,)).fetchall()
+    body=(f'A new experimental alert was recorded at {zoo}. Animal: {animal}. Observed behaviour: {behaviour}. Model estimate: {score:.1f}%. This is not an official warning. Check the Living Lens portal for details.')
+    sent=0
+    for person in recipients:
+        if person['email_enabled'] and all(os.environ.get(k) for k in ('LIVING_LENS_SMTP_HOST','LIVING_LENS_SMTP_FROM')):
+            msg=EmailMessage(); msg['Subject']=f'Living Lens update for {zoo}'; msg['From']=os.environ['LIVING_LENS_SMTP_FROM']; msg['To']=person['email']; msg.set_content(body)
+            with smtplib.SMTP(os.environ['LIVING_LENS_SMTP_HOST'],int(os.environ.get('LIVING_LENS_SMTP_PORT','587')),timeout=12) as smtp:
+                smtp.starttls(); user=os.environ.get('LIVING_LENS_SMTP_USERNAME'); password=os.environ.get('LIVING_LENS_SMTP_PASSWORD')
+                if user and password: smtp.login(user,password)
+                smtp.send_message(msg)
+            sent+=1
+        if person['sms_enabled'] and person['phone'] and all(os.environ.get(k) for k in ('LIVING_LENS_TWILIO_ACCOUNT_SID','LIVING_LENS_TWILIO_AUTH_TOKEN','LIVING_LENS_TWILIO_FROM')):
+            sid=os.environ['LIVING_LENS_TWILIO_ACCOUNT_SID']; token=os.environ['LIVING_LENS_TWILIO_AUTH_TOKEN']
+            payload=urllib.parse.urlencode({'To':person['phone'],'From':os.environ['LIVING_LENS_TWILIO_FROM'],'Body':body}).encode()
+            request=urllib.request.Request(f'https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json',data=payload,headers={'Authorization':'Basic '+base64.b64encode(f'{sid}:{token}'.encode()).decode()})
+            with urllib.request.urlopen(request,timeout=12): pass
+            sent+=1
+    return sent
+
 class Handler(BaseHTTPRequestHandler):
     server_version='LivingLens/1.0'
     def log_message(self, fmt, *args): print('%s - %s'%(self.address_string(),fmt%args))
@@ -74,6 +99,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith('/api/'):
             u=self.user()
             if path=='/api/health': return self.send_json(200,{'ok':True,'database':'ready','model':inference.status()})
+            if path=='/api/zoos': return self.send_json(200,{'items':ZOOS})
             if path=='/api/me': return self.send_json(200,{'user':dict(u) if u else None})
             if not u: return self.send_json(401,{'error':'Sign in required'})
             with db() as c:
@@ -82,6 +108,9 @@ class Handler(BaseHTTPRequestHandler):
                     rows=c.execute('SELECT o.*,u.name AS submitted_by,p.estimate,p.model_version FROM observations o JOIN users u ON u.id=o.user_id LEFT JOIN predictions p ON p.observation_id=o.id WHERE o.user_id=? ORDER BY o.id DESC LIMIT 200',(u['id'],)).fetchall(); return self.send_json(200,{'items':[dict(r) for r in rows]})
                 if path=='/api/alerts':
                     rows=c.execute("SELECT a.*,o.animal,o.behaviour,o.enclosure FROM alerts a JOIN observations o ON o.id=a.observation_id WHERE a.status='active' AND a.zoo=? ORDER BY a.created_at DESC",(u['zoo'] or '',)).fetchall(); return self.send_json(200,{'items':[dict(r) for r in rows]})
+                if path=='/api/preferences':
+                    row=c.execute('SELECT phone,email_enabled,sms_enabled FROM notification_preferences WHERE user_id=?',(u['id'],)).fetchone()
+                    return self.send_json(200,{'preferences':dict(row) if row else {'phone':'','email_enabled':0,'sms_enabled':0}})
                 if path=='/api/map':
                     rows=c.execute("SELECT a.id,a.score,a.latitude,a.longitude,a.status,a.created_at,o.animal,o.behaviour,o.zoo FROM alerts a JOIN observations o ON o.id=a.observation_id WHERE a.status='active' AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL AND (?!='citizen' OR a.zoo=?) ORDER BY a.created_at DESC",(u['role'],u['zoo'] or '')).fetchall(); return self.send_json(200,{'items':[dict(r) for r in rows]})
                 if path=='/api/zookeepers':
@@ -98,9 +127,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e: return self.send_json(400,{'error':str(e)})
         if path=='/api/register':
             name=str(data.get('name','')).strip(); email=str(data.get('email','')).strip().lower(); password=str(data.get('password',''))
-            if not name or '@' not in email or len(password)<10: return self.send_json(422,{'error':'Enter a name, valid email, and password of at least 10 characters.'})
+            zoo=str(data.get('zoo') or '').strip(); phone=str(data.get('phone') or '').strip(); email_enabled=bool(data.get('email_updates')); sms_enabled=bool(data.get('sms_updates'))
+            if not name or '@' not in email or len(password)<10 or zoo not in ZOO_NAMES: return self.send_json(422,{'error':'Enter a name, valid email, password of at least 10 characters, and select a zoo.'})
+            if sms_enabled and (len(phone)<7 or len(phone)>20): return self.send_json(422,{'error':'Enter a valid phone number to receive SMS updates.'})
             try:
-                with db() as c: c.execute("INSERT INTO users(name,email,password_hash,role,zoo,latitude,longitude) VALUES(?,?,?,'citizen',?,?,?)",(name,email,pw_hash(password),str(data.get('zoo') or '').strip() or None,data.get('latitude'),data.get('longitude'))); row=c.execute('SELECT id FROM users WHERE email=?',(email,)).fetchone()
+                with db() as c:
+                    c.execute("INSERT INTO users(name,email,password_hash,role,zoo,latitude,longitude) VALUES(?,?,?,'citizen',?,?,?)",(name,email,pw_hash(password),zoo,data.get('latitude'),data.get('longitude'))); row=c.execute('SELECT id FROM users WHERE email=?',(email,)).fetchone()
+                    c.execute('INSERT INTO notification_preferences(user_id,phone,email_enabled,sms_enabled) VALUES(?,?,?,?)',(row['id'],phone or None,int(email_enabled),int(sms_enabled)))
                 token=sign(row['id'],int(time.time())+86400*7); return self.send_json(201,{'ok':True},f'{COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800')
             except sqlite3.IntegrityError: return self.send_json(409,{'error':'That email is already registered.'})
         if path=='/api/login':
@@ -111,12 +144,18 @@ class Handler(BaseHTTPRequestHandler):
         if path=='/api/logout': return self.send_json(200,{'ok':True},f'{COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0')
         u=self.user()
         if not u: return self.send_json(401,{'error':'Sign in required'})
+        if path=='/api/preferences':
+            if u['role']!='citizen': return self.send_json(403,{'error':'Citizen access required'})
+            phone=str(data.get('phone') or '').strip(); email_enabled=bool(data.get('email_updates')); sms_enabled=bool(data.get('sms_updates'))
+            if sms_enabled and (len(phone)<7 or len(phone)>20): return self.send_json(422,{'error':'Enter a valid phone number to receive SMS updates.'})
+            with db() as c: c.execute('INSERT INTO notification_preferences(user_id,phone,email_enabled,sms_enabled) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET phone=excluded.phone,email_enabled=excluded.email_enabled,sms_enabled=excluded.sms_enabled,updated_at=CURRENT_TIMESTAMP',(u['id'],phone or None,int(email_enabled),int(sms_enabled)))
+            return self.send_json(200,{'ok':True})
         if path=='/api/observations':
             if u['role']!='zookeeper': return self.send_json(403,{'error':'Zookeeper access required'})
             try:
                 total=int(data['total_animals']); affected=int(data['affected_animals']); intensity=float(data['intensity']); duration=float(data['duration']); lat=data.get('latitude'); lon=data.get('longitude')
-                animal=str(data['animal']).strip(); behaviour=str(data['behaviour']).strip(); enclosure=str(data['enclosure']).strip(); desc=str(data['description']).strip()
-                if total<1 or affected<0 or affected>total or not (0<=intensity<=10) or duration<=0 or not all((animal,behaviour,enclosure,desc)): raise ValueError('Check required fields, animal counts, intensity (0-10), and duration.')
+                animal=str(data['animal']).strip(); behaviour=str(data['behaviour']).strip(); enclosure=str(data['enclosure']).strip(); desc=str(data['description']).strip(); zoo=str(data.get('zoo') or '').strip()
+                if total<1 or affected<0 or affected>total or not (0<=intensity<=10) or duration<=0 or zoo not in ZOO_NAMES or not all((animal,behaviour,enclosure,desc)): raise ValueError('Select a zoo and check required fields, animal counts, intensity (0-10), and duration.')
                 abnormal=round(affected/total*100,2)
             except (KeyError,ValueError,TypeError) as e: return self.send_json(422,{'error':str(e) or 'Invalid observation'})
             # With no affected animals there is no observed behavioural signal to score.
@@ -131,11 +170,16 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as e: return self.send_json(422,{'error':str(e)})
             try:
                 with db() as c:
-                    cur=c.execute('INSERT INTO observations(user_id,zoo,enclosure,animal,behaviour,total_animals,affected_animals,abnormality,intensity,duration,description,latitude,longitude) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(u['id'],u['zoo'],enclosure,animal,behaviour,total,affected,abnormal,intensity,duration,desc,lat,lon))
+                    cur=c.execute('INSERT INTO observations(user_id,zoo,enclosure,animal,behaviour,total_animals,affected_animals,abnormality,intensity,duration,description,latitude,longitude) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(u['id'],zoo,enclosure,animal,behaviour,total,affected,abnormal,intensity,duration,desc,lat,lon))
                     oid=cur.lastrowid; c.execute('INSERT INTO predictions(observation_id,estimate,model_version) VALUES(?,?,?)',(oid,estimate,version))
                     threshold=os.environ.get('LIVING_LENS_ALERT_THRESHOLD')
-                    if not no_abnormal_behavior and threshold and lat is not None and lon is not None and estimate>=float(threshold): c.execute('INSERT OR IGNORE INTO alerts(observation_id,zoo,score,latitude,longitude) VALUES(?,?,?,?,?)',(oid,u['zoo'],estimate,lat,lon))
-                return self.send_json(201,{'id':oid,'estimate':estimate,'model_version':version,'abnormality_percentage':abnormal,'no_abnormal_behavior':no_abnormal_behavior})
+                    if not no_abnormal_behavior and threshold and estimate>=float(threshold): c.execute('INSERT OR IGNORE INTO alerts(observation_id,zoo,score,latitude,longitude) VALUES(?,?,?,?,?)',(oid,zoo,estimate,lat,lon))
+                    alert=c.execute('SELECT id FROM alerts WHERE observation_id=?',(oid,)).fetchone()
+                sent=0
+                if alert:
+                    try: sent=send_notifications(zoo,animal,behaviour,estimate)
+                    except Exception as notify_error: print(f'Notification delivery failed: {notify_error}')
+                return self.send_json(201,{'id':oid,'estimate':estimate,'model_version':version,'abnormality_percentage':abnormal,'no_abnormal_behavior':no_abnormal_behavior,'notifications_sent':sent})
             except Exception as e: return self.send_json(500,{'error':f'Could not save observation: {e}'})
         if path=='/api/zookeepers':
             if u['role']!='admin': return self.send_json(403,{'error':'Administrator access required'})

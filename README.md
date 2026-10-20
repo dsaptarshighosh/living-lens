@@ -57,7 +57,9 @@ The model is meant for experimentation with the supplied dataset, not operationa
 
 - Zookeeper sign-in, observation entry, model estimate, and personal observation history.
 - Admin sign-in and zookeeper account management.
-- Citizen registration, zoo alerts, and a zoo map.
+- Citizen registration requires choosing a nearest zoo from the supported list. Citizens can opt in to email and/or SMS alerts at registration and update those preferences later.
+- Zookeepers choose the zoo/location for each report. New alerts are delivered only to citizens subscribed to that zoo.
+- Email delivery uses optional SMTP settings; SMS delivery uses optional Twilio settings. Set provider credentials in the deployment environment (never in GitHub) to enable delivery. Until configured, citizens can still view their zoo's alerts in the portal.
 - Six animal photos on the home page, with photographer and license credits.
 - A small Python standard-library server backed by SQLite.
 
@@ -68,4 +70,8 @@ python -m unittest discover -s .\tests -v
 ```
 
 The model-related tests need the local model files, so train the model first. The rest of the app uses Python’s standard library.
+
+## Email and SMS notifications
+
+Notification channels are opt-in. Add provider settings from `.env.example` to the Render service environment to enable delivery: SMTP host/from (plus username/password when required) for email, or Twilio account SID/auth token/from-number for SMS. Keep credentials private. Alerts are created only when `LIVING_LENS_ALERT_THRESHOLD` is configured and the model estimate reaches it; the threshold is unset by default. Do not treat these experimental alerts as official hazard warnings.
 
